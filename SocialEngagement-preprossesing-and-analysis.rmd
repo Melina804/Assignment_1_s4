@@ -1,0 +1,248 @@
+---
+title: "Portfolio 1"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pacman)
+p_load(readr, lme4, DHARMa, MuMIn, knitr, kableExtra, tidyverse, ggpubr, ggrepel, grid, jpeg)
+ggplot2::theme_set(theme_bw())
+
+```
+
+#PREPROSSESING
+
+Loading in the data and making everything within the right coordinates
+
+```{r cars}
+
+Samples <- read_csv("Exported_EyeLink_data/Samples_merged.csv", col_types = cols(
+  ParticipantID = col_character(),
+  ParticipantGender = col_character(),
+  EyeTracked = col_character(),
+  Task = col_character(),
+  SearchOrder = col_double(),
+  ForagingType = col_character(),
+  Trial = col_double(),
+  Stimulus = col_character(),
+  Video = col_character(),
+  Time = col_double(),
+  GazeX = col_double(),
+  GazeY = col_double(),
+  PupilSize = col_double(),
+  FixationNo = col_double(),
+  Fix_StartTime = col_double(),
+  Fix_EndTime = col_double(),
+  Fix_Duration = col_double(),
+  Fix_MeanX = col_double(),
+  Fix_MeanY = col_double(),
+  Fix_MeanPupilSize = col_double(),
+  SaccadeNo = col_double(),
+  Sac_StartTime = col_double(),
+  Sac_EndTime = col_double(),
+  Sac_Duration = col_double(),
+  Sac_StartX = col_double(),
+  Sac_StartY = col_double(),
+  Sac_EndX = col_double(),
+  Sac_EndY = col_double(),
+  Sac_PeakVelocity = col_double(),
+  Sac_MeanVelocity = col_double(),
+  Sac_Blink = col_logical(),
+  Sac_Direction = col_character(),
+  Sac_Amplitude = col_double()))
+
+
+Samples <- Samples %>% 
+  mutate(GazeY = 1051-GazeY, Fix_MeanY = 1051-Fix_MeanY) %>% 
+  filter(Time<=41202)
+```
+
+Making a density plot over pupil size
+
+```{r}
+
+pupil_size <- Samples[!is.na(Samples$PupilSize) & Samples$Task == "SocialEngagement",] %>% 
+  group_by(ParticipantID, ParticipantGender, Trial, PupilSize, Video) %>% 
+  summarize()
+
+ggplot(pupil_size, aes(PupilSize, color = ParticipantGender)) + geom_density() 
+
+```
+
+Adding info
+
+```{r}
+
+Add_Info <- function(df){
+  
+  df$ActorGender[grepl("f",df$Video)]='Female'
+  df$ActorGender[grepl("m",df$Video)]='Male'
+  
+  df$Direction[grepl("_pl_o1_dir",df$Video)]='Direct'
+  df$Direction[grepl("_pl_o1_div",df$Video)]='Averted'
+  
+  df$Ostention[grepl("_+o",df$Video)]= "Ostensive"
+  df$Ostention[grepl("_-o",df$Video)]= "Non-ostensive"
+  
+  return(df)
+}
+
+pupil_size <- Add_Info(pupil_size)
+
+```
+
+
+```{r}
+
+mLog <-
+  glmer(
+    PupilSize ~ Direction * Ostention + (1 + Direction * Ostention | ParticipantID),
+    family = gaussian(link = "log"),
+    data = pupil_size
+  )
+
+pm <- predict(mLog)
+
+plot(density(pm))
+plot(density(pupil_size$PupilSize))
+
+summary(abs(pm-pupil_size$PupilSize))
+
+```
+
+
+```{r}
+
+dLog <- simulateResiduals(mLog, n = 250)
+plot(dLog)
+
+summary(mLog)
+summary(pupil_size$PupilSize)
+
+
+```
+
+
+```{r}
+
+r.squaredGLMM(mLog) #We are interested in the R^2m, because it says how much of the variance can be explained by the model, which is not that much, even though the residualse is cute like the expected
+
+```
+
+#vISUALISATION
+
+```{r}
+
+#Making a subset, where we get the mean pupil size, so now we have to data sets, this one contains only one point for each participant, whereas the other contains all the datapoints
+Pup <- pupil_size[!is.na(pupil_size$PupilSize),] %>% # remember to remove NAs 
+  group_by(ParticipantID, Trial) %>% 
+  summarize(PupilSize = mean(PupilSize),
+            ParticipantGender = ParticipantGender[1],
+            Ostention = Ostention[1],
+            Direction = Direction[1])
+
+
+# plot density of pupil sizes, color by gender
+ggplot(Pup, aes(PupilSize, color = ParticipantGender)) + geom_density() + facet_grid(Direction~Ostention)
+
+# plot density of pupil sizes color by participant ID
+ggplot(Pup, aes(PupilSize, color = ParticipantID)) + geom_density() + facet_grid(Direction~Ostention)
+
+```
+
+Making a scanpath on top of a ostensive and direct picture (missing a picture of the conditions, so i just copied one from the other cexperiment just so the script ran haha)
+
+```{r}
+
+x = subset(Samples, ParticipantID ==    'F1' & Trial == 3)
+
+## Let's make a summary dataset
+Fix <- x[!is.na(x$FixationNo),] %>% 
+  group_by(FixationNo) %>% # since I only have one participant and one trial
+  summarize(MeanX = Fix_MeanX[1], MeanY = Fix_MeanY[1], Duration = Fix_Duration[1]) %>% 
+  filter(Duration>=300) # only keep fixations > 300 ms
+
+img <- jpeg::readJPEG('stimuli_Foraging/space_capsules.jpg')  
+img <- grid::rasterGrob(img, width=unit(1, "npc"), height = unit(1,"npc"),
+                        interpolate = FALSE)
+
+ggplot(Fix, aes(MeanX, MeanY, color = Fix$FixationNo)) + 
+  annotation_custom(img, xmin = 0, xmax = 1680, ymin = 0, ymax = 1050) +
+  # hacky way to adjust opacity of background picture:
+  annotate(geom = "rect", xmin = 0, xmax = 1680, ymin = 0, ymax = 1050, fill = "white", alpha = .3) +
+  geom_path(color = "black") +
+  geom_point(size = Fix$Duration*.02, alpha = .8) +
+  geom_text_repel(aes(label = Fix$Duration), size = 3, color = "white") +
+  xlim(0,1680) + ylim(0,1050)
+
+```
+
+
+Making a scanpath on top of a non-ostensive and averted picture (missing a picture of the conditions, so i just copied one from the other experiment just so the script ran haha)
+
+```{r}
+
+x_na = subset(Samples, ParticipantID ==    'F2' & Trial == 4)
+
+## Let's make a summary dataset
+Fix <- x_na[!is.na(x$FixationNo),] %>% 
+  group_by(FixationNo) %>% # since I only have one participant and one trial
+  summarize(MeanX = Fix_MeanX[1], MeanY = Fix_MeanY[1], Duration = Fix_Duration[1]) %>% 
+  filter(Duration>=300) # only keep fixations > 300 ms
+
+img <- jpeg::readJPEG('stimuli_Foraging/space_capsules.jpg')  
+img <- grid::rasterGrob(img, width=unit(1, "npc"), height = unit(1,"npc"),
+                        interpolate = FALSE)
+
+ggplot(Fix, aes(MeanX, MeanY, color = Fix$FixationNo)) + 
+  annotation_custom(img, xmin = 0, xmax = 1680, ymin = 0, ymax = 1050) +
+  # hacky way to adjust opacity of background picture:
+  annotate(geom = "rect", xmin = 0, xmax = 1680, ymin = 0, ymax = 1050, fill = "white", alpha = .3) +
+  geom_path(color = "black") +
+  geom_point(size = Fix$Duration*.02, alpha = .8) +
+  geom_text_repel(aes(label = Fix$Duration), size = 3, color = "white") +
+  xlim(0,1680) + ylim(0,1050)
+
+```
+
+The total change of pupil size across a trial
+
+```{r}
+
+ggplot(Samples, aes(Time, PupilSize, color = ParticipantGender)) +
+  geom_smooth() + facet_wrap(.~Task, scales = "free_x")
+
+```
+
+#ANALYSIS - i have problems here ahah
+
+```{r}
+
+pupil_size_model <- glmer(PupilSize ~ Direction * Ostention + (1 + Direction * Ostention | ParticipantID), family = gaussian(link="log"), data = Pup) 
+summary(pupil_size_model)
+
+
+```
+
+R2m = indicate how much of the variance is explained by the model
+
+```{r}
+r.squaredGLMM(pupil_size_model)
+
+```
+
+Spaghetti plot of the pupil size according to condition
+
+```{r}
+
+ggplot(pupil_size, aes(Direction, PupilSize, group = ParticipantID))+
+  geom_smooth(method=lm, aes(color=ParticipantID), se=FALSE)+
+  theme_classic()+
+  xlab("Condition") +
+  ylab("Pupil Size") + 
+  facet_wrap(.~Ostention)
+
+```
+
